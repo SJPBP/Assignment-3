@@ -5,7 +5,7 @@ import pandas as pd
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 from time import time
 
-# load csv, use map to change numbered classes to named classes
+# csv to df and then update numbered classes to proper names
 g_data = pd.read_csv("g_data.csv", header=None)
 y = g_data.iloc[:, 0].map({
     1: "inner membrane proteins",
@@ -15,62 +15,83 @@ y = g_data.iloc[:, 0].map({
 })
 sequences = g_data.iloc[:, 3]
 
-# extract features using biopython
+amino_acids = [
+    "A", "R", "N", "D", "C", "Q", "E", "G", "H",
+    "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"
+]
+
+# extracting with biopython
 def extract_features(seq):
-    X = ProteinAnalysis(str(seq).upper().replace('U','C'))
-    return [
-        X.count_amino_acids().get('A',0),
-        X.count_amino_acids().get('E',0),
-        X.amino_acids_percent.get('K',0.0),
-        X.amino_acids_percent.get('L',0.0),
-        X.molecular_weight(),
-        X.aromaticity(),
-        X.instability_index(),
-        X.isoelectric_point(),
-        X.secondary_structure_fraction()[0]
-    ]
+    X = ProteinAnalysis(str(seq).upper().replace('U', 'C'))
 
+    aa_counts = X.count_amino_acids()
+    aa_percent = X.amino_acids_percent
+    flexibility_avg = sum(X.flexibility()) / len(X.flexibility())
+
+    features = (
+        [aa_counts.get(aa, 0) for aa in amino_acids] +    # counts
+        [aa_percent.get(aa, 0.0) for aa in amino_acids] +  # percentages
+        [
+            X.molecular_weight(),
+            X.aromaticity(),
+            X.instability_index(),
+            X.isoelectric_point(),
+            X.secondary_structure_fraction()[0],  # helix
+            X.secondary_structure_fraction()[1],  # sheet
+            X.secondary_structure_fraction()[2],  # coil
+            X.gravy(), # with some mashed potatoes omg
+            flexibility_avg
+        ]
+    )
+    return features
+
+# build feature matrix
 feature_matrix = [extract_features(s) for s in sequences]
-columns = ['A_count','E_count','K_percent','L_percent',
-           'molecular_weight','aromaticity','instability_index',
-           'isoelectric_point','helix_fraction']
-X = pd.DataFrame(feature_matrix, columns=columns) # x is a df made from function
+columns = (
+    [f"{aa}_count" for aa in amino_acids] +
+    [f"{aa}_percent" for aa in amino_acids] +
+    [
+        "molecular_weight", "aromaticity", "instability_index",
+        "isoelectric_point", "helix_fraction", "sheet_fraction",
+        "coil_fraction", "gravy", "flexibility_avg"
+    ]
+)
+X = pd.DataFrame(feature_matrix, columns=columns)
 
-# printing for checking class distribution
+# Print class distribution CAN BE DELETED LATER
 vc = y.value_counts()
-vc.index.name = None        # drop extra “0” index name
+vc.index.name = None
 print("Class Balances:")
 print(vc)
 
-# split data 
+# split data into train and test sets
+# TO DO: consider k-fold cross validation since dataset is ~500 proteins
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-# calculate class weights based on class distribution 
-# (class weight for outer membrane proteins is low)
+# calculate class weights
 class_weights = {label: (len(y_train) / (len(vc) * count)) for label, count in vc.items()}
 
-# make classifier and train with class weights
+# train LinearSVC
 clf = LinearSVC(dual=False, max_iter=10000, random_state=42, class_weight=class_weights)
 start = time()
 clf.fit(X_train, y_train)
 print(f"\nTrained in {time() - start:.2f}s")
 
-# indices were not aligned somehow before so I'll do that here
+# test the model
 y_test = y_test.reset_index(drop=True)
 X_test = X_test.reset_index(drop=True)
-y_pred  = clf.predict(X_test)
+y_pred = clf.predict(X_test)
 
-# save results to see T and F predictions in a csv
+# save results in a csv for output checking CAN BE DELETED LATER
 results = pd.DataFrame({
     'True_Label': y_test,
-    'Predicted':  y_pred,
+    'Predicted': y_pred,
     'Is_Correct': y_test == y_pred
 })
-
-# display accuracy and save results
-print("Accuracy:", accuracy_score(y_test, y_pred))
 results = pd.concat([results, X_test], axis=1)
+
+print("Accuracy:", accuracy_score(y_test, y_pred))
 results.to_csv('svm_predictions.csv', index=False)
-print("\nSaved fixed output to svm_predictions.csv")
+print("\nSaved output to svm_predictions.csv")
