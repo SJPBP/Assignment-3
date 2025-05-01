@@ -1,9 +1,8 @@
 from sklearn.model_selection import train_test_split
 from sklearn.svm import LinearSVC
-from sklearn.metrics import accuracy_score, classification_report
 import pandas as pd
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
-from time import time
+from sklearn.metrics import confusion_matrix, recall_score, matthews_corrcoef
 
 # csv to df and then update numbered classes to proper names
 g_data = pd.read_csv("g_data.csv", header=None)
@@ -58,40 +57,54 @@ columns = (
 )
 X = pd.DataFrame(feature_matrix, columns=columns)
 
-# Print class distribution CAN BE DELETED LATER
-vc = y.value_counts()
-vc.index.name = None
-print("Class Balances:")
-print(vc)
-
 # split data into train and test sets
-# TO DO: consider k-fold cross validation since dataset is ~500 proteins
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
 # calculate class weights
-class_weights = {label: (len(y_train) / (len(vc) * count)) for label, count in vc.items()}
+cw = y.value_counts()
+cw.index.name = None
+class_weights = {label: (len(y_train) / (len(cw) * count)) for label, count in cw.items()}
 
-# train LinearSVC
+# train LinearSVC 
+# not using kernel=linear bc it takes took long for some reason
 clf = LinearSVC(dual=False, max_iter=10000, random_state=42, class_weight=class_weights)
-start = time()
 clf.fit(X_train, y_train)
-print(f"\nTrained in {time() - start:.2f}s")
 
 # test the model
 y_test = y_test.reset_index(drop=True)
 X_test = X_test.reset_index(drop=True)
 y_pred = clf.predict(X_test)
 
-# save results in a csv for output checking CAN BE DELETED LATER
-results = pd.DataFrame({
-    'True_Label': y_test,
-    'Predicted': y_pred,
-    'Is_Correct': y_test == y_pred
-})
-results = pd.concat([results, X_test], axis=1)
+# grab accuracy
+acc = clf.score(X_test, y_test)
 
-print("Accuracy:", accuracy_score(y_test, y_pred))
-results.to_csv('svm_predictions.csv', index=False)
-print("\nSaved output to svm_predictions.csv")
+# grab confusion matrix
+cm = confusion_matrix(y_test, y_pred, labels=clf.classes_)
+
+# grab sensitivity per classs
+recall = recall_score(y_test, y_pred, average=None, labels=clf.classes_)
+
+# grab MCC
+mcc = matthews_corrcoef(y_test, y_pred)
+
+# grab pecificity per class = TN / (TN + FP)
+specificity = []
+for i in range(len(cm)):
+    tn = cm.sum() - (cm[i, :].sum() + cm[:, i].sum() - cm[i, i])
+    fp = cm[:, i].sum() - cm[i, i]
+    specificity.append(tn / (tn + fp) if (tn + fp) != 0 else 0.0)
+
+# Output results
+print("\nEvaluation Metrics")
+print("==================")
+print(f"Accuracy: {acc:.4f}")
+print(f"Matthews Correlation Coefficient (MCC): {mcc:.4f}\n")
+
+print("Class-wise Metrics:")
+print("-------------------")
+for idx, cls in enumerate(clf.classes_):
+    print(f"Class: {cls}")
+    print(f"  Sensitivity (Recall): {recall[idx]:.4f}")
+    print(f"  Specificity:          {specificity[idx]:.4f}\n")
